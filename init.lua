@@ -93,7 +93,11 @@ vim.opt.shiftwidth = 2 -- Indent by 4 spaces
 vim.opt.tabstop = 2 -- A tab is displayed as 4 spaces
 vim.opt.softtabstop = 2 -- Tab key inserts 4 spaces
 vim.g.have_nerd_font = true
-
+vim.opt.foldmethod = 'expr'
+vim.opt.foldexpr = 'v:lua.vim.treesitter.foldexpr()'
+vim.opt.foldenable = true
+vim.opt.foldlevel = 99
+vim.opt.foldlevelstart = 99
 -- [[ Setting options ]]
 -- See `:help vim.o`
 -- NOTE: You can change these options as you wish!
@@ -159,6 +163,9 @@ vim.o.inccommand = 'split'
 
 -- Show which line your cursor is on
 vim.o.cursorline = true
+
+-- Show vertical guide lines at columns 100 and 120
+vim.o.colorcolumn = '100,120'
 
 -- Minimal number of screen lines to keep above and below the cursor.
 vim.o.scrolloff = 10
@@ -239,6 +246,13 @@ end
 local rtp = vim.opt.rtp
 rtp:prepend(lazypath)
 
+-- Put this BEFORE require('lazy').setup(...)
+vim.filetype.add {
+  extension = {
+    edp = 'edp',
+  },
+}
+
 -- [[ Configure and install plugins ]]
 --
 --  To check the current status of your plugins, run
@@ -250,6 +264,7 @@ rtp:prepend(lazypath)
 --    :Lazy update
 --
 -- NOTE: Here is where you install your plugins.
+
 require('lazy').setup({
   -- NOTE: Plugins can be added with a link (or for a github repo: 'owner/repo' link).
   'NMAC427/guess-indent.nvim', -- Detect tabstop and shiftwidth automatically
@@ -678,7 +693,38 @@ require('lazy').setup({
       local servers = {
         clangd = {},
         -- gopls = {},
-        -- pyright = {},
+        pyright = {
+          settings = {
+            python = {
+              -- Point pyright at, in priority order: a project-local `.venv`
+              -- (what `uv` creates, or an active $VIRTUAL_ENV), then the
+              -- active conda env, then whatever `python3` is on PATH -- so it
+              -- resolves packages installed there instead of the system
+              -- Python.
+              pythonPath = (function()
+                local venv = vim.env.VIRTUAL_ENV
+                if venv then
+                  return venv .. '/bin/python'
+                end
+
+                local venv_dir = vim.fs.find('.venv', { upward = true, type = 'directory', path = vim.fn.getcwd() })[1]
+                if venv_dir then
+                  local venv_python = venv_dir .. '/bin/python'
+                  if (vim.uv or vim.loop).fs_stat(venv_python) then
+                    return venv_python
+                  end
+                end
+
+                local conda_prefix = vim.env.CONDA_PREFIX
+                if conda_prefix then
+                  return conda_prefix .. '/bin/python'
+                end
+
+                return vim.fn.exepath 'python3'
+              end)(),
+            },
+          },
+        },
         -- rust_analyzer = {},
         -- ... etc. See `:help lspconfig-all` for a list of all the pre-configured LSPs
         --
@@ -727,17 +773,18 @@ require('lazy').setup({
       require('mason-lspconfig').setup {
         ensure_installed = {}, -- explicitly set to an empty table (Kickstart populates installs via mason-tool-installer)
         automatic_installation = false,
-        handlers = {
-          function(server_name)
-            local server = servers[server_name] or {}
-            -- This handles overriding only values explicitly passed
-            -- by the server configuration above. Useful when disabling
-            -- certain features of an LSP (for example, turning off formatting for ts_ls)
-            server.capabilities = vim.tbl_deep_extend('force', {}, capabilities, server.capabilities or {})
-            require('lspconfig')[server_name].setup(server)
-          end,
-        },
+        automatic_enable = false, -- we call vim.lsp.enable ourselves below, after merging in our settings
       }
+
+      -- `require('lspconfig')[name].setup()` is a no-op in newer nvim-lspconfig
+      -- releases for servers that only ship a `lsp/<name>.lua` (no
+      -- `lspconfig/configs/<name>.lua` shim), so configure servers directly
+      -- through the native 0.11+ vim.lsp.config/enable API instead.
+      for server_name, server in pairs(servers) do
+        server.capabilities = vim.tbl_deep_extend('force', {}, capabilities, server.capabilities or {})
+        vim.lsp.config(server_name, server)
+      end
+      vim.lsp.enable(vim.tbl_keys(servers))
     end,
   },
 
@@ -775,6 +822,9 @@ require('lazy').setup({
         lua = { 'stylua' },
         python = { 'autopep8' },
         latex = { 'latexindent' },
+        bash = { 'beautysh' },
+        sh = { 'beautysh' },
+        json = { 'biome' },
         -- Conform can also run multiple formatters sequentially
         -- python = { "isort", "black" },
         --
@@ -882,7 +932,26 @@ require('lazy').setup({
       signature = { enabled = true },
     },
   },
-
+  -- { -- You can easily change to a different colorscheme.
+  --   -- Change the name of the colorscheme plugin below, and then
+  --   -- change the command in the config to whatever the name of that colorscheme is.
+  --   --
+  --   -- If you want to see what colorschemes are already installed, you can use `:Telescope colorscheme`.
+  --   'nyoom-engineering/oxocarbon.nvim',
+  --   priority = 1000, -- Make sure to load this before all the other start plugins.
+  --   config = function()
+  --     -- require('oxocarbon').setup {
+  --     --   styles = {
+  --     --     comments = { italic = false }, -- Disable italics in comments
+  --     --   },
+  --     -- }
+  --
+  --     -- Load the colorscheme here.
+  --     -- Like many other themes, this one has different styles, and you could load
+  --     -- any other, such as 'tokyonight-storm', 'tokyonight-moon', or 'tokyonight-day'.
+  --     vim.cmd.colorscheme 'oxocarbon'
+  --   end,
+  -- },
   { -- You can easily change to a different colorscheme.
     -- Change the name of the colorscheme plugin below, and then
     -- change the command in the config to whatever the name of that colorscheme is.
@@ -902,6 +971,9 @@ require('lazy').setup({
       -- Like many other themes, this one has different styles, and you could load
       -- any other, such as 'tokyonight-storm', 'tokyonight-moon', or 'tokyonight-day'.
       vim.cmd.colorscheme 'tokyonight-night'
+
+      -- Make the colorcolumn guide lines lighter than the background, not darker.
+      vim.api.nvim_set_hl(0, 'ColorColumn', { bg = '#2a2e42' })
     end,
   },
 
@@ -951,7 +1023,7 @@ require('lazy').setup({
     main = 'nvim-treesitter.configs', -- Sets main module to use for opts
     -- [[ Configure Treesitter ]] See `:help nvim-treesitter`
     opts = {
-      ensure_installed = { 'bash', 'c', 'diff', 'html', 'lua', 'luadoc', 'markdown', 'markdown_inline', 'query', 'vim', 'vimdoc' },
+      ensure_installed = { 'bash', 'c', 'diff', 'html', 'lua', 'luadoc', 'markdown', 'markdown_inline', 'query', 'vim', 'vimdoc', 'mermaid' },
       -- Autoinstall languages that are not installed
       auto_install = true,
       highlight = {
@@ -969,6 +1041,21 @@ require('lazy').setup({
     --    - Incremental selection: Included, see `:help nvim-treesitter-incremental-selection-mod`
     --    - Show your current context: https://github.com/nvim-treesitter/nvim-treesitter-context
     --    - Treesitter + textobjects: https://github.com/nvim-treesitter/nvim-treesitter-textobjects
+  },
+  {
+    'FreeFem/FreeFem-parser-vim',
+    ft = 'edp',
+    config = function(plugin)
+      vim.opt.runtimepath:append(plugin.dir)
+      local syntax_dir = vim.fn.stdpath 'config' .. '/syntax'
+      vim.fn.mkdir(syntax_dir, 'p')
+      local src = plugin.dir .. '/edp.vim'
+      local dst = syntax_dir .. '/edp.vim'
+      if vim.fn.filereadable(dst) == 0 then
+        vim.fn.writefile(vim.fn.readfile(src), dst)
+      end
+      vim.cmd 'syntax enable'
+    end,
   },
   {
     'catgoose/nvim-colorizer.lua',
@@ -1011,7 +1098,7 @@ require('lazy').setup({
   -- require 'kickstart.plugins.lint',
   -- require 'kickstart.plugins.autopairs',
   -- require 'kickstart.plugins.neo-tree',
-  -- require 'kickstart.plugins.gitsigns', -- adds gitsigns recommend keymaps
+  require 'kickstart.plugins.gitsigns', -- adds gitsigns recommend keymaps
 
   -- NOTE: The import below can automatically add your own plugins, configuration, etc from `lua/custom/plugins/*.lua`
   --    This is the easiest way to modularize your config.
